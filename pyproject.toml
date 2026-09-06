@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-knowledge-hub"
+version = "0.1.0"
+authors = [
+  { name="your name", email="xxx@xxx.com" }
+]
+description = "enterprise knowledge hub project"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-community",
+    "milvus",
+    "rank_bm25",
+    "python-dotenv"
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff",
+  "pytest"
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.pyrefly]
+source-roots = ["."]

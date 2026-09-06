@@ -1,0 +1,85 @@
+services:
+  # docker-compose.yml
+  postgres:
+    image: pgvector/pgvector:pg16   # 替换 postgres:16
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: knowledge
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  elasticsearch:
+    image: elasticsearch:8.12.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+
+  neo4j:
+    image: neo4j:5
+    environment:
+      NEO4J_AUTH: neo4j/password123
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt 协议
+    volumes:
+      - neo4j_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # 管理界面 http://localhost:15672  guest/guest
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  vector-consumer:
+    profiles: ["worker"]
+    build: .
+    command: python -m app.workers.vector_consumer
+    env_file: .env
+    depends_on:
+      - rabbitmq
+      - postgres
+      - elasticsearch
+    volumes:
+      - .:/app
+
+  graph-consumer:
+    profiles: ["worker"]
+    build: .
+    command: python -m app.workers.graph_consumer
+    env_file: .env
+    depends_on:
+      - rabbitmq
+      - postgres
+      - neo4j
+    volumes:
+      - .:/app
+      
+# volumes 提升到顶层，和 services 左对齐，不再缩进
+volumes:
+  es_data:
+  neo4j_data:
