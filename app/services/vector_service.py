@@ -6,6 +6,7 @@ from app.infra.minio_client import download_file
 from app.infra.neo4j_client import delete_document_graph
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
+from app.parsing.schemas import ParseStatus
 from app.services.chunker import split_text
 from app.services.parser import parse_document
 from app.ai.embeddings.embedder import embed_texts
@@ -34,10 +35,12 @@ async def process_vector(document_id: int, db: AsyncSession) -> int:
     doc.vector_done = False
     doc.graph_done = False
 
-    # 1.从MinIO下载原始文件字节流
-    file_data = download_file(doc.minio_key)
-    # 2.文档解析：pdf/docx/txt → 提取纯文本
-    text = parse_document(file_data, doc.file_type)
+    # 不再 download raw + parse_document
+    if doc.parse_status != ParseStatus.PARSED.value or not doc.parsed_markdown_key:
+        raise ValueError(
+            f"文档未解析完成: doc={document_id}, parse_status={doc.parse_status}"
+        )
+    text = download_file(doc.parsed_markdown_key).decode("utf-8")
 
     # 解析完是空文本，标记失败，返回0个块
     if not text.strip():

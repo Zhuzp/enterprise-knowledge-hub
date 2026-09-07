@@ -141,9 +141,24 @@ TTS实现语音的同步流式播放。
 化评估机制，自动跑实验来评估检索效果。
 
 **项目启动指令**
-# 项目
-uvicorn app.main:app --reload
 # 终端 1
-python -m app.workers.vector_consumer
+cd D:\code\python\enterprise-knowledge-hub
+docker compose up -d postgres redis minio elasticsearch neo4j rabbitmq
+
 # 终端 2
+cd D:\code\python\enterprise-knowledge-hub
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+
+# 终端 3~6（需要文档全流程时）
+.\.venv\Scripts\Activate.ps1
+python -m app.workers.parse_consumer --queue document.parse.light.queue
+# 新开终端
+python -m app.workers.parse_consumer --queue document.parse.heavy.queue
+python -m app.workers.vector_consumer
 python -m app.workers.graph_consumer
+
+**数据库迁移指令**
+alembic revision -m "add document parse fields"
+alembic upgrade head
+alembic current

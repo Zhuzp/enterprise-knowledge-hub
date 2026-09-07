@@ -22,6 +22,11 @@ class DocumentResponse(BaseModel):
     reject_reason: str | None = None
     vector_done: bool = False
     graph_done: bool = False
+    parse_status: str = "pending"
+    parse_error: str | None = None
+    parsed_markdown_key: str | None = None
+    parse_metadata: dict | None = None
+    media_category: str = "document"
 
 
 class DocumentListResponse(BaseModel):
@@ -48,3 +53,15 @@ class DocumentReviewRequest(BaseModel):
 class DocumentReviewResponse(BaseModel):
     message: str
     document: DocumentResponse
+
+    
+class ParsedPreviewResponse(BaseModel):
+    """解析预览：pending / parsing / parsed / failed"""
+
+    status: str
+    markdown: str | None = None
+    error: str | None = None
+    metadata: dict | None = None
+    document_id: int | None = None
+    file_name: str | None = None
+    media_category: str | None = None

@@ -57,6 +57,11 @@ class AppSettings(BaseSettings):
     rabbitmq_vector_queue: str = "document.vector.queue"
     rabbitmq_graph_queue: str = "document.graph.queue"
 
+    # RabbitMQ — 解析（新增）
+    rabbitmq_exchange_uploaded: str = "document.uploaded"
+    rabbitmq_parse_light_queue: str = "document.parse.light.queue"
+    rabbitmq_parse_heavy_queue: str = "document.parse.heavy.queue"
+
     # Embedding / Hybrid 检索
     embedding_model: str = "text-embedding-v4"
     embedding_dims: int = 1024
@@ -91,6 +96,32 @@ class AppSettings(BaseSettings):
     mem0_enabled: bool = False
     mem0_top_k_user: int = 3
     mem0_top_k_session: int = 2
+
+    # 审核策略
+    review_require_parsed: bool = True   # 未解析完不允许 approve
+
+    # 解析路由
+    parse_heavy_file_types: str = "mp4,mov,avi,mkv,mp3,wav,m4a,flac"
+
+    # MinIO 公开 URL（Markdown 里图片链接）
+    minio_public_base_url: str = "http://127.0.0.1:9000/documents"
+
+    # 上传大小
+    max_upload_size_mb: int = 50
+    max_media_upload_size_mb: int = 500
+
+    allowed_file_types: str = "pdf,docx,md,txt,png,jpg,jpeg,webp,mp3,wav,m4a,mp4,mov"
+
+    # 音视频解析
+    asr_model: str = "paraformer-v2"
+    asr_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+    video_model: str = "qwen-vl-max-latest"
+    video_segment_seconds: int = 300          # 每 5 分钟一段
+    video_max_duration_seconds: int = 7200    # 单文件最长 2 小时
+    ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
+    # OCR（图片 / 视频帧，若已有可复用）
+    ocr_model: str = "qwen-vl-ocr-latest"
 
     @property
     def database_url(self) -> str:
