@@ -10,14 +10,57 @@ logger = logging.getLogger(__name__)
 _memory = None
 
 
+def _build_mem0_config() -> dict[str, Any]:
+    """Mem0 OSS：LLM 抽记忆 + Embedder 向量化 + pgvector 存储"""
+    llm_model = settings.mem0_llm_model or settings.openai_model
+    embed_model = settings.mem0_embedding_model or settings.embedding_model
+
+    return {
+        "vector_store": {
+            "provider": "pgvector",
+            "config": {
+                "connection_string": settings.pg_connection_string,
+                "collection_name": settings.mem0_collection_name,
+                "embedding_model_dims": settings.embedding_dims,
+            },
+        },
+        "embedder": {
+            "provider": "openai",
+            "config": {
+                "model": embed_model,
+                "api_key": settings.openai_api_key,
+                "openai_base_url": settings.openai_base_url,
+                "embedding_dims": settings.embedding_dims,
+            },
+        },
+        "llm": {
+            "provider": "openai",
+            "config": {
+                "model": llm_model,
+                "api_key": settings.openai_api_key,
+                "openai_base_url": settings.openai_base_url,
+                "temperature": 0,
+            },
+        },
+    }
+
+
 def _get_mem0():
     global _memory
     if not settings.mem0_enabled:
         return None
+    if not settings.openai_api_key:
+        logger.warning("mem0_enabled=true 但未配置 openai_api_key，Mem0 未初始化")
+        return None
     if _memory is None:
         from mem0 import Memory
 
-        _memory = Memory()
+        _memory = Memory.from_config(_build_mem0_config())
+        logger.info(
+            "Mem0 已初始化 collection=%s dims=%s",
+            settings.mem0_collection_name,
+            settings.embedding_dims,
+        )
     return _memory
 
 
@@ -68,9 +111,7 @@ async def add_conversation_turn(
     ]
 
     def _add():
-        # 用户级：跨会话
         mem.add(messages, user_id=uid, metadata={"scope": "user"})
-        # 会话级：仅本会话
         mem.add(messages, user_id=uid, run_id=sid, metadata={"scope": "session"})
 
     try:

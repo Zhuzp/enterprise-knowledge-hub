@@ -98,9 +98,52 @@ async def maybe_summarize(session_id: int) -> None:
         logger.exception("会话摘要失败 session_id=%s", session_id)
 
 
-async def rebuild_from_pg(session_id: int, messages: list) -> MemoryContext:
-    """Redis  miss 时从 PG 重建（可选，增强容错）"""
-    ctx = MemoryContext()
-    for msg in messages[-settings.memory_window_size * 2 :]:
-        ctx.recent_turns.append(ChatTurn(role=msg.role, content=msg.content))
+async def fetch_recent_turns_from_pg(session_id: int) -> list[ChatTurn]:
+    """从 qa_messages 取最近 N 轮对话（不含本轮尚未落库的消息）"""
+    from sqlalchemy import select
+
+    from app.infra.db import AsyncSessionLocal
+    from app.models.chat import QAMessage
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(QAMessage)
+            .where(QAMessage.session_id == session_id)
+            .order_by(QAMessage.created_at.asc())
+        )
+        messages = result.scalars().all()
+
+    max_len = settings.memory_window_size * 2
+    recent = messages[-max_len:]
+    return [ChatTurn(role=m.role, content=m.content) for m in recent]
+
+
+async def restore_redis_window(session_id: int, turns: list[ChatTurn]) -> None:
+    """PG 回填后写回 Redis，避免下次再查库"""
+    if not turns:
+        return
+    redis = get_redis()
+    key = _window_key(session_id)
+    await redis.delete(key)
+    for turn in turns:
+        item = json.dumps({"role": turn.role, "content": turn.content}, ensure_ascii=False)
+        await redis.rpush(key, item)
+    await redis.expire(key, settings.memory_session_ttl_seconds)
+    if await redis.get(_summary_key(session_id)):
+        await redis.expire(_summary_key(session_id), settings.memory_session_ttl_seconds)
+
+
+async def load_short_term_with_pg_fallback(session_id: int) -> MemoryContext:
+    """读 Redis；window 为空时从 PG 回填 recent_turns 并预热 Redis"""
+    ctx = await load_short_term(session_id)
+    if ctx.recent_turns:
+        return ctx
+
+    turns = await fetch_recent_turns_from_pg(session_id)
+    if not turns:
+        return ctx
+
+    logger.info("Redis window 为空，PG 回填 session_id=%s turns=%d", session_id, len(turns))
+    ctx.recent_turns = turns
+    await restore_redis_window(session_id, turns)
     return ctx

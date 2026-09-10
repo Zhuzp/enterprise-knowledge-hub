@@ -4,17 +4,15 @@ from collections.abc import AsyncGenerator
 import asyncio
 
 from app.ai.memory.long_term import add_conversation_turn, load_long_term
-from app.ai.memory.short_term import append_turn, load_short_term, maybe_summarize
+from app.ai.memory.short_term import append_turn, load_short_term_with_pg_fallback, maybe_summarize
 from app.ai.memory.schemas import MemoryContext
-from app.ai.retrievers.hybrid_retriever import hybrid_retrieve
-from app.infra.db import AsyncSessionLocal
+from app.ai.memory.prompt import SYSTEM_PROMPT, build_user_prompt
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.rag_graph import SYSTEM_PROMPT
 from app.core.settings import settings
 from app.models.chat import QAMessage, QASession
 from app.schemas.chat import Citation
@@ -24,8 +22,8 @@ async def build_memory_context(
     session_id: int,
     question: str,
 ) -> MemoryContext:
-    """合并 Redis 短期 + Mem0 长期"""
-    short = await load_short_term(session_id)
+    """合并 Redis 短期（PG 回填兜底）+ Mem0 长期"""
+    short = await load_short_term_with_pg_fallback(session_id)
     long = await load_long_term(user_id, session_id, question)
     return MemoryContext(
         session_summary=short.session_summary,
@@ -102,24 +100,22 @@ async def ask_in_session(
     session: QASession,
     question: str,
     owner_ids: list[int] | None,
-    memory: MemoryContext | None = None,
 ) -> tuple[QAMessage, QAMessage, list[Citation]]:
-    from app.ai.rag_graph import run_rag
+    from app.ai.agents.agentic_rag_graph import run_agentic_rag
 
     user_msg = await save_message(db, session.id, "user", question)
 
-    # 首条消息时，用问题作为会话标题
     if session.title == "新对话":
         session.title = question[:50]
-    
-    # 1. 读记忆（注意：不含本轮 user 消息，避免重复）
+
     memory = await build_memory_context(session.user_id, session.id, question)
 
-    answer, chunks = await run_rag(question, owner_ids, memory=memory)
+    answer, chunks, _route_meta = await run_agentic_rag(
+        question, owner_ids, memory=memory
+    )
     citations = chunks_to_citations(chunks)
     assistant_msg = await save_message(db, session.id, "assistant", answer, citations)
 
-       # 3. 更新 Redis / Mem0
     await _after_message_persisted(
         user_id=session.user_id,
         session_id=session.id,
@@ -129,31 +125,37 @@ async def ask_in_session(
 
     return user_msg, assistant_msg, citations
 
-async def stream_answer(question: str,
+
+async def stream_answer(
+    question: str,
     owner_ids: list[int] | None,
     *,
     user_id: int,
     session_id: int,
     memory: MemoryContext | None = None,
 ) -> AsyncGenerator[str, None]:
-    from app.ai.memory.prompt import SYSTEM_PROMPT, build_user_prompt
+    """SSE 流式输出：Agentic 检索 + 流式生成"""
+    from app.ai.agents.agentic_rag_graph import run_agentic_retrieve
+    from app.ai.agents.schemas import RoutePath
 
     memory = memory or await build_memory_context(user_id, session_id, question)
 
-    """SSE 流式输出：先检索，再流式生成"""
-    async with AsyncSessionLocal() as db:
-        hits = await hybrid_retrieve(db, question, owner_ids, settings.rag_top_k)
-    chunks = [h.to_dict() for h in hits]
+    context, chunks, _meta, decision = await run_agentic_retrieve(
+        question, owner_ids, memory=memory
+    )
 
-    if not chunks and not memory.has_content():
+    if decision.path == RoutePath.DIRECT:
+        if not memory.has_content():
+            yield json.dumps({"type": "token", "content": "你好！我是企业知识库助手，请上传资料或直接提问业务问题。"})
+            yield json.dumps({"type": "done", "citations": []})
+            return
+        context = ""
+
+    if not context and not memory.has_content():
         yield json.dumps({"type": "token", "content": "未找到相关文档，请先上传资料后再提问。"})
         yield json.dumps({"type": "done", "citations": []})
         return
 
-    parts = []
-    for i, c in enumerate(chunks, 1):
-        parts.append(f"[{i}] 文档《{c['title']}》\n{c['content']}")
-    context = "\n\n".join(parts)
     citations = [c.model_dump() for c in chunks_to_citations(chunks)]
     user_prompt = build_user_prompt(question=question, rag_context=context, memory=memory)
 
@@ -169,10 +171,8 @@ async def stream_answer(question: str,
         HumanMessage(content=user_prompt),
     ]
 
-    full: list[str] = []
     async for chunk in llm.astream(messages):
         if chunk.content:
-            full.append(chunk.content)
             yield json.dumps({"type": "token", "content": chunk.content})
 
     yield json.dumps({"type": "done", "citations": citations})

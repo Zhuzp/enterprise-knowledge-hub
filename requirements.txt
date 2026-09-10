@@ -24,3 +24,7 @@ aio-pika
 pgvector
 openai
 httpx
+openpyxl
+mem0ai
+pytest>=8.0
+pytest-asyncio>=0.24

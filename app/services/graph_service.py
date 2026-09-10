@@ -30,7 +30,7 @@ async def process_graph(document_id: int, db: AsyncSession, max_retry: int = 10)
         raise RuntimeError(f"等待 chunks 超时: document_id={document_id}")
 
     count = 0
-    for chunk in chunks[:3]:
+    for chunk in chunks:
         extract_and_store(
             chunk_id=chunk.id,
             document_id=doc.id,

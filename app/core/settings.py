@@ -68,9 +68,6 @@ class AppSettings(BaseSettings):
     recall_top_k: int = 20
     rrf_k: int = 60
     rrf_top_n: int = 10
-    
-    graph_recall_enabled: bool = True
-
 
     # Rerank（DashScope 独立 compatible-api 端点，与 chat/embedding 不同）
     rerank_model: str = "qwen3-rerank"
@@ -92,10 +89,13 @@ class AppSettings(BaseSettings):
     memory_summary_trigger: int = 12     # window 超过 12 条时触发摘要
     memory_session_ttl_seconds: int = 259200  # Redis 3 天过期
 
-    # Mem0 长期记忆
+    # Mem0 长期记忆（需 pip install mem0ai，PG 需 CREATE EXTENSION vector）
     mem0_enabled: bool = False
     mem0_top_k_user: int = 3
     mem0_top_k_session: int = 2
+    mem0_collection_name: str = "mem0_memories"
+    mem0_llm_model: str = ""   # 空则复用 openai_model
+    mem0_embedding_model: str = ""  # 空则复用 embedding_model
 
     # 审核策略
     review_require_parsed: bool = True   # 未解析完不允许 approve
@@ -110,7 +110,10 @@ class AppSettings(BaseSettings):
     max_upload_size_mb: int = 50
     max_media_upload_size_mb: int = 500
 
-    allowed_file_types: str = "pdf,docx,md,txt,png,jpg,jpeg,webp,mp3,wav,m4a,mp4,mov"
+    allowed_file_types: str = "pdf,docx,md,txt,png,jpg,jpeg,webp,mp3,wav,m4a,mp4,mov,csv,xlsx"
+
+    # 单 Sheet / CSV 最多转多少行进 Markdown（防超大表撑爆 chunk）
+    spreadsheet_max_rows_per_sheet: int = 500
 
     # 音视频解析
     asr_model: str = "paraformer-v2"
@@ -127,6 +130,14 @@ class AppSettings(BaseSettings):
     def database_url(self) -> str:
         return (
             f"postgresql+asyncpg://{self.pg_user}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+        )
+
+    @property
+    def pg_connection_string(self) -> str:
+        """Mem0 pgvector 用的同步连接串（非 asyncpg）"""
+        return (
+            f"postgresql://{self.pg_user}:{self.pg_password}"
+            f"@{self.pg_host}:{self.pg_port}/{self.pg_database}"
         )
 
     @property

@@ -39,15 +39,20 @@ async def handle_message(message: aio_pika.IncomingMessage) -> None:
                 await run_document_parse(document_id, db)
                 await db.commit()
                 logger.info("parse 成功 doc=%s", document_id)
-            except Exception:
+            except Exception as exc:
                 logger.exception("parse 失败 doc=%s", document_id)
-                await db.rollback()
-                doc = (await db.execute(
-                    select(Document).where(Document.id == document_id)
-                )).scalar_one_or_none()
-                if doc:
-                    doc.parse_status = ParseStatus.FAILED.value
+                # run_document_parse 失败时已写入 parse_status / parse_error，需 commit 而非 rollback
+                try:
                     await db.commit()
+                except Exception:
+                    await db.rollback()
+                    doc = (await db.execute(
+                        select(Document).where(Document.id == document_id)
+                    )).scalar_one_or_none()
+                    if doc:
+                        doc.parse_status = ParseStatus.FAILED.value
+                        doc.parse_error = str(exc)[:500]
+                        await db.commit()
 
 
 async def main(queue_name: str) -> None:

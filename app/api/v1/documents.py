@@ -44,6 +44,9 @@ CONTENT_TYPE_MAP = {
     ".m4a": "audio/mp4",
     ".mp4": "video/mp4",
     ".mov": "video/quicktime",
+    ".csv": "text/csv",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
 }
 
 
@@ -237,6 +240,14 @@ async def reparse_document(
     doc.parse_error = None
     doc.parsed_markdown_key = None
     doc.parse_metadata = {"progress": 0.0, "stage": "reparse_queued"}
+    doc.vector_done = False
+    doc.graph_done = False
+    if doc.status in {
+        DocumentStatus.READY.value,
+        DocumentStatus.PROCESSING.value,
+        DocumentStatus.PUBLISHED.value,
+    }:
+        doc.status = DocumentStatus.PENDING_REVIEW.value
     await db.flush()
     await db.refresh(doc)
 
@@ -279,6 +290,8 @@ async def delete_document(
 
     # 删 MinIO 文件
     delete_file(doc.minio_key)
+    if doc.parsed_markdown_key:
+        delete_file(doc.parsed_markdown_key)
     # 删 ES 索引
     delete_document_chunks(doc.id)
     # 删 Neo4j 图谱
