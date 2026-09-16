@@ -16,6 +16,7 @@ async def process_graph(document_id: int, db: AsyncSession, max_retry: int = 10)
     if doc is None:
         raise ValueError(f"文档不存在: {document_id}")
 
+    # 轮询等待：直到process_vector把chunk写入PG（指数退避重试）
     for attempt in range(max_retry):
         chunk_result = await db.execute(
             select(DocumentChunk)
@@ -27,10 +28,12 @@ async def process_graph(document_id: int, db: AsyncSession, max_retry: int = 10)
             break
         await asyncio.sleep(2**attempt)
     else:
+        # for循环正常跑完没有break → 全部重试耗尽，超时报错
         raise RuntimeError(f"等待 chunks 超时: document_id={document_id}")
 
     count = 0
     for chunk in chunks:
+        # 同步函数：抽取实体关系，写入Neo4j
         extract_and_store(
             chunk_id=chunk.id,
             document_id=doc.id,

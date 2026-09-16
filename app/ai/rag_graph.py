@@ -12,6 +12,7 @@ from app.core.settings import settings
 from app.infra.db import AsyncSessionLocal
 from app.ai.memory.prompt import SYSTEM_PROMPT, build_user_prompt
 from app.ai.memory.schemas import MemoryContext
+from langchain_core.runnables.config import ensure_config
 
 
 SYSTEM_PROMPT = """你是企业内部知识库助手。请仅根据提供的参考资料回答问题。
@@ -81,7 +82,7 @@ async def generate_node(state: RAGState) -> dict[str, Any]:
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=user_prompt),
     ]
-    response = await llm.ainvoke(messages)
+    response = await llm.ainvoke(messages, config=ensure_config())
     return {"answer": response.content}
 
 

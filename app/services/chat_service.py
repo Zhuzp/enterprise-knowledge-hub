@@ -1,7 +1,12 @@
 import json
+import logging
 from collections.abc import AsyncGenerator
 
 import asyncio
+
+logger = logging.getLogger(__name__)
+
+_STREAM_ERROR_MSG = "抱歉，处理问题时出错了，请稍后重试。"
 
 from app.ai.memory.long_term import add_conversation_turn, load_long_term
 from app.ai.memory.short_term import append_turn, load_short_term_with_pg_fallback, maybe_summarize
@@ -102,6 +107,7 @@ async def ask_in_session(
     owner_ids: list[int] | None,
 ) -> tuple[QAMessage, QAMessage, list[Citation]]:
     from app.ai.agents.agentic_rag_graph import run_agentic_rag
+    from app.observability import trace_chat
 
     user_msg = await save_message(db, session.id, "user", question)
 
@@ -110,10 +116,33 @@ async def ask_in_session(
 
     memory = await build_memory_context(session.user_id, session.id, question)
 
-    answer, chunks, _route_meta = await run_agentic_rag(
-        question, owner_ids, memory=memory
-    )
-    citations = chunks_to_citations(chunks)
+    with trace_chat(
+        name="chat.ask",
+        user_id=session.user_id,
+        session_id=session.id,
+        question=question,
+        stream=False,
+        tags=["rag", "agentic"],
+    ) as obs:
+        answer, chunks, route_meta = await run_agentic_rag(
+            question,
+            owner_ids,
+            memory=memory,
+            config=obs["config"],
+        )
+        citations = chunks_to_citations(chunks)
+        obs["update"](
+            output={
+                "answer": answer[:4000],
+                "citation_chunk_ids": [c.chunk_id for c in citations],
+            },
+            metadata={
+                "route": route_meta.get("route"),
+                "chunk_count": len(chunks),
+                "has_graph_reasoning": bool(route_meta.get("graph_reasoning")),
+            },
+        )
+
     assistant_msg = await save_message(db, session.id, "assistant", answer, citations)
 
     await _after_message_persisted(
@@ -137,42 +166,88 @@ async def stream_answer(
     """SSE 流式输出：Agentic 检索 + 流式生成"""
     from app.ai.agents.agentic_rag_graph import run_agentic_retrieve
     from app.ai.agents.schemas import RoutePath
+    from app.observability import trace_chat
 
     memory = memory or await build_memory_context(user_id, session_id, question)
 
-    context, chunks, _meta, decision = await run_agentic_retrieve(
-        question, owner_ids, memory=memory
-    )
+    with trace_chat(
+        name="chat.ask.stream",
+        user_id=user_id,
+        session_id=session_id,
+        question=question,
+        stream=True,
+        tags=["rag", "agentic"],
+    ) as obs:
+        lf_config = obs["config"]
 
-    if decision.path == RoutePath.DIRECT:
-        if not memory.has_content():
-            yield json.dumps({"type": "token", "content": "你好！我是企业知识库助手，请上传资料或直接提问业务问题。"})
+        try:
+            context, chunks, meta, decision = await run_agentic_retrieve(
+                question,
+                owner_ids,
+                memory=memory,
+                config=lf_config,
+            )
+        except Exception:
+            logger.exception("agentic retrieve failed session_id=%s", session_id)
+            obs["update"](level="ERROR", status_message="retrieve_failed")
+            yield json.dumps({"type": "token", "content": _STREAM_ERROR_MSG})
             yield json.dumps({"type": "done", "citations": []})
             return
-        context = ""
 
-    if not context and not memory.has_content():
-        yield json.dumps({"type": "token", "content": "未找到相关文档，请先上传资料后再提问。"})
-        yield json.dumps({"type": "done", "citations": []})
-        return
+        if decision.path == RoutePath.DIRECT:
+            if not memory.has_content():
+                msg = "你好！我是企业知识库助手，请上传资料或直接提问业务问题。"
+                obs["update"](output={"answer": msg}, metadata={"route": decision.model_dump()})
+                yield json.dumps({"type": "token", "content": msg})
+                yield json.dumps({"type": "done", "citations": []})
+                return
+            context = ""
 
-    citations = [c.model_dump() for c in chunks_to_citations(chunks)]
-    user_prompt = build_user_prompt(question=question, rag_context=context, memory=memory)
+        if not context and not memory.has_content():
+            msg = "未找到相关文档，请先上传资料后再提问。"
+            obs["update"](output={"answer": msg}, metadata={"route": decision.model_dump()})
+            yield json.dumps({"type": "token", "content": msg})
+            yield json.dumps({"type": "done", "citations": []})
+            return
 
-    llm = ChatOpenAI(
-        model=settings.openai_model,
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        temperature=0.2,
-        streaming=True,
-    )
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=user_prompt),
-    ]
+        citations = [c.model_dump() for c in chunks_to_citations(chunks)]
+        user_prompt = build_user_prompt(question=question, rag_context=context, memory=memory)
 
-    async for chunk in llm.astream(messages):
-        if chunk.content:
-            yield json.dumps({"type": "token", "content": chunk.content})
+        llm = ChatOpenAI(
+            model=settings.openai_model,
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            temperature=0.2,
+            streaming=True,
+        )
+        messages = [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=user_prompt),
+        ]
 
-    yield json.dumps({"type": "done", "citations": citations})
+        answer_parts: list[str] = []
+        try:
+            async for chunk in llm.astream(messages, config=lf_config):
+                if chunk.content:
+                    answer_parts.append(chunk.content)
+                    yield json.dumps({"type": "token", "content": chunk.content})
+        except Exception:
+            logger.exception("llm stream failed session_id=%s", session_id)
+            obs["update"](level="ERROR", status_message="llm_stream_failed")
+            yield json.dumps({"type": "token", "content": _STREAM_ERROR_MSG})
+            yield json.dumps({"type": "done", "citations": citations})
+            return
+
+        obs["update"](
+            output={
+                "answer": "".join(answer_parts)[:4000],
+                "citation_chunk_ids": [c["chunk_id"] for c in citations],
+            },
+            metadata={
+                "route": meta.get("route"),
+                "chunk_count": len(chunks),
+                "has_graph_reasoning": bool(meta.get("graph_reasoning")),
+            },
+        )
+
+        yield json.dumps({"type": "done", "citations": citations})

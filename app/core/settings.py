@@ -81,6 +81,13 @@ class AppSettings(BaseSettings):
     langchain_project: str = "enterprise-knowledge-hub"
     langchain_environment: str = "development"
 
+    # 在 AppSettings 里加（建议放在 LangSmith 配置后面）
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_sample_rate: float = 1.0
+
     # settings.py 追加
     redis_url: str = "redis://127.0.0.1:6379/0"
 
@@ -101,7 +108,7 @@ class AppSettings(BaseSettings):
     review_require_parsed: bool = True   # 未解析完不允许 approve
 
     # 解析路由
-    parse_heavy_file_types: str = "mp4,mov,avi,mkv,mp3,wav,m4a,flac"
+    parse_heavy_file_types: str = "mp4,mov,avi,mkv,mp3,wav,m4a"
 
     # MinIO 公开 URL（Markdown 里图片链接）
     minio_public_base_url: str = "http://127.0.0.1:9000/documents"
@@ -118,13 +125,16 @@ class AppSettings(BaseSettings):
     # 音视频解析
     asr_model: str = "paraformer-v2"
     asr_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
-    video_model: str = "qwen-vl-max-latest"
+    video_model: str = "qwen-vl-plus"         # 需开通 VL 多模态；403 见 .env.example
+    video_understand_mock: bool = False       # True=不调 VL API，开发用
+    video_understand_fail_open: bool = True   # API 失败时降级占位，不阻断整段解析
     video_segment_seconds: int = 300          # 每 5 分钟一段
     video_max_duration_seconds: int = 7200    # 单文件最长 2 小时
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     # OCR（图片 / 视频帧，若已有可复用）
     ocr_model: str = "qwen-vl-ocr-latest"
+
 
     @property
     def database_url(self) -> str:
@@ -161,5 +171,22 @@ def _sync_langsmith_env() -> None:
         os.environ["LANGCHAIN_ENVIRONMENT"] = settings.langchain_environment
 
 
+def _sync_langfuse_env() -> None:
+    """Langfuse SDK 读 os.environ；enabled=false 时清掉，避免误上报。"""
+    import os
+    if not settings.langfuse_enabled:
+        for k in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL", "LANGFUSE_HOST"):
+            os.environ.pop(k, None)
+        return
+    if settings.langfuse_public_key:
+        os.environ["LANGFUSE_PUBLIC_KEY"] = settings.langfuse_public_key
+    if settings.langfuse_secret_key:
+        os.environ["LANGFUSE_SECRET_KEY"] = settings.langfuse_secret_key
+    if settings.langfuse_base_url:
+        # v3 用 BASE_URL；部分文档仍写 HOST，两个都写更稳
+        os.environ["LANGFUSE_BASE_URL"] = settings.langfuse_base_url
+        os.environ["LANGFUSE_HOST"] = settings.langfuse_base_url
+
 settings = AppSettings()
 _sync_langsmith_env()
+_sync_langfuse_env()

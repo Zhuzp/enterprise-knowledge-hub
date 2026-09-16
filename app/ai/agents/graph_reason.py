@@ -27,7 +27,7 @@ WHERE related IS NOT NULL
 RETURN seed.name AS source,
        related.name AS target,
        [r IN rels | type(r)] AS rel_types,
-       length(rels) AS hops
+       length(path) AS hops
 ORDER BY hops
 LIMIT $limit
 """

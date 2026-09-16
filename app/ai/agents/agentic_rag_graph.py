@@ -3,6 +3,7 @@
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables.config import ensure_config
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
@@ -36,6 +37,7 @@ async def analyze_node(state: AgenticRAGState) -> dict[str, Any]:
     decision = await analyze_question(
         state["question"],
         state.get("memory"),
+        config=ensure_config(),
     )
     return {"route_decision": decision}
 
@@ -46,6 +48,7 @@ async def rewrite_node(state: AgenticRAGState) -> dict[str, Any]:
         state["question"],
         state.get("memory"),
         graph_expand=decision.needs_graph if decision else False,
+        config=ensure_config(),
     )
     return {"rewritten_queries": queries}
 
@@ -102,10 +105,13 @@ async def generate_node(state: AgenticRAGState) -> dict[str, Any]:
         )
 
     llm = _get_llm()
-    resp = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=user_prompt),
-    ])
+    resp = await llm.ainvoke(
+        [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=user_prompt),
+        ],
+        config=ensure_config(),
+    )
     return {"answer": resp.content}
 
 
@@ -194,10 +200,14 @@ async def run_agentic_retrieve(
     question: str,
     owner_ids: list[int] | None,
     memory: MemoryContext | None = None,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]], dict[str, Any], RouteDecision]:
     """与 LangGraph 相同的检索路由，供流式/非流式共用。"""
     memory = memory or MemoryContext()
-    decision = await analyze_question(question, memory)
+    cfg = config or {}
+
+    decision = await analyze_question(question, memory, config=cfg)
     meta: dict[str, Any] = {"route": decision.model_dump()}
 
     if decision.path == RoutePath.DIRECT:
@@ -209,6 +219,7 @@ async def run_agentic_retrieve(
             question,
             memory,
             graph_expand=decision.needs_graph,
+            config=cfg,
         )
         meta["rewritten_queries"] = queries
 
@@ -240,11 +251,15 @@ async def run_agentic_rag(
     question: str,
     owner_ids: list[int] | None,
     memory: MemoryContext | None = None,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    invoke_config = config or {}
+
     # **异步执行整个 LangGraph 图，把输入丢进去，跑完把完整最终状态返回出来**。
     result = await agentic_rag_graph.ainvoke({
         "question": question,
         "owner_ids": owner_ids,
         "memory": memory,
-    })
+    },config=invoke_config)
     return result["answer"], result.get("chunks", []), _build_meta(result)

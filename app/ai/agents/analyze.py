@@ -69,6 +69,8 @@ def _to_path(intent: Intent, complexity: Complexity, needs_hybrid: bool, needs_g
 async def analyze_question(
     question: str,
     memory: MemoryContext | None = None,
+    *,
+    config: dict | None = None,
 ) -> RouteDecision:
     # 拿到大模型对象
     llm = _get_llm()
@@ -79,7 +81,7 @@ async def analyze_question(
     resp = await llm.ainvoke([
         SystemMessage(content=ANALYZE_PROMPT),
         HumanMessage(content=user_content),
-    ])
+    ],config=config or {})
 
     # ------------------- 尝试解析大模型返回的JSON字符串 -------------------
     try:

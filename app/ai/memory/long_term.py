@@ -8,6 +8,7 @@ from app.core.settings import settings
 logger = logging.getLogger(__name__)
 
 _memory = None
+_memory_init_failed = False
 
 
 def _build_mem0_config() -> dict[str, Any]:
@@ -46,21 +47,29 @@ def _build_mem0_config() -> dict[str, Any]:
 
 
 def _get_mem0():
-    global _memory
-    if not settings.mem0_enabled:
+    global _memory, _memory_init_failed
+    if not settings.mem0_enabled or _memory_init_failed:
         return None
     if not settings.openai_api_key:
         logger.warning("mem0_enabled=true 但未配置 openai_api_key，Mem0 未初始化")
         return None
     if _memory is None:
-        from mem0 import Memory
+        try:
+            from mem0 import Memory
 
-        _memory = Memory.from_config(_build_mem0_config())
-        logger.info(
-            "Mem0 已初始化 collection=%s dims=%s",
-            settings.mem0_collection_name,
-            settings.embedding_dims,
-        )
+            _memory = Memory.from_config(_build_mem0_config())
+            logger.info(
+                "Mem0 已初始化 collection=%s dims=%s",
+                settings.mem0_collection_name,
+                settings.embedding_dims,
+            )
+        except Exception:
+            logger.exception(
+                "Mem0 初始化失败，长期记忆已降级关闭。"
+                "请确认已安装 mem0ai、psycopg[binary]，且 PG 已启用 vector 扩展。"
+            )
+            _memory_init_failed = True
+            return None
     return _memory
 
 

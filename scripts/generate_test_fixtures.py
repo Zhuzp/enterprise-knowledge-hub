@@ -160,11 +160,23 @@ def write_minimal_mp3() -> None:
     (OUT / "media" / "语音备忘.mp3").write_bytes(minimal)
 
 
-def write_mp4_with_ffmpeg() -> bool:
+def _resolve_ffmpeg() -> str | None:
     import shutil
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
+
+
+def write_mp4_with_ffmpeg() -> bool:
     import subprocess
 
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _resolve_ffmpeg()
     if not ffmpeg:
         return False
     out = OUT / "media" / "培训片段.mp4"
@@ -181,7 +193,10 @@ def write_mp4_with_ffmpeg() -> bool:
         "-shortest",
         str(out),
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(
+        cmd, check=True, capture_output=True,
+        encoding="utf-8", errors="replace",
+    )
     return True
 
 

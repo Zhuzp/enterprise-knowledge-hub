@@ -38,6 +38,7 @@ async def rewrite_queries(
     memory: MemoryContext | None = None,
     *,
     graph_expand: bool = False,
+    config: dict | None = None,
 ) -> list[str]:
     llm = _get_llm()
     # 提取最近最多5轮对话记忆文本
@@ -46,10 +47,13 @@ async def rewrite_queries(
         memory_text = "\n".join(f"{t.role}: {t.content}" for t in memory.recent_turns[-5:])
 
     # 调用大模型，传入改写prompt + 记忆 + 用户问题
-    resp = await llm.ainvoke([
-        SystemMessage(content=REWRITE_PROMPT),
-        HumanMessage(content=f"【记忆】\n{memory_text}\n\n【问题】\n{question}"),
-    ])
+    resp = await llm.ainvoke(
+        [
+            SystemMessage(content=REWRITE_PROMPT),
+            HumanMessage(content=f"【记忆】\n{memory_text}\n\n【问题】\n{question}"),
+        ],
+        config=config or {},
+    )
 
     # 兜底：解析失败就直接用原始问题作为唯一query
     queries = [question]
