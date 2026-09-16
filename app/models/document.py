@@ -1,11 +1,22 @@
 from datetime import datetime
 from enum import Enum
+from sqlalchemy.dialects.postgresql import JSONB
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.infra.db import Base
+from app.infra.db import Base 
 
+class ParseStatus(str, Enum):
+    PENDING = "pending"
+    PARSING = "parsing"
+    PARSED = "parsed"
+    FAILED = "failed"
+class MediaCategory(str, Enum):
+    DOCUMENT = "document"
+    IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
 
 class DocumentStatus(str, Enum):
     PENDING_REVIEW = "pending_review"  # 已上传，待审核
@@ -33,6 +44,12 @@ class Document(Base):
     minio_key: Mapped[str] = mapped_column(String(500))  # MinIO 里的路径
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     status: Mapped[str] = mapped_column(String(20), default=DocumentStatus.PENDING_REVIEW.value)
+    # 解析相关（新增）
+    parse_status: Mapped[str] = mapped_column(String(20), default=ParseStatus.PENDING.value)
+    parse_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    parsed_markdown_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    parse_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    media_category: Mapped[str] = mapped_column(String(20), default=MediaCategory.DOCUMENT.value)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

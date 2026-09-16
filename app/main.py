@@ -24,6 +24,11 @@ async def lifespan(_app: FastAPI):
     except Exception as exc:
         logger.warning("RabbitMQ 初始化失败，审核发布功能不可用: %s", exc)
     yield
+    try:
+        from app.observability import flush_langfuse
+        flush_langfuse()
+    except Exception:
+        pass
     close_driver()
 
 #lifespan 是 FastAPI 的生命周期钩子函数，启动时调用一次

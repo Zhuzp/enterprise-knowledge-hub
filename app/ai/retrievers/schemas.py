@@ -8,7 +8,7 @@ class ChunkHit:
     title: str
     content: str
     score: float
-    source: str  # "bm25" | "pgvector" | "graph"
+    source: str  # "bm25" | "pgvector" | "graph_reason"
     rank: int = 0
 
     def to_dict(self) -> dict:

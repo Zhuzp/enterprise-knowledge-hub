@@ -57,15 +57,17 @@ class AppSettings(BaseSettings):
     rabbitmq_vector_queue: str = "document.vector.queue"
     rabbitmq_graph_queue: str = "document.graph.queue"
 
+    # RabbitMQ — 解析（新增）
+    rabbitmq_exchange_uploaded: str = "document.uploaded"
+    rabbitmq_parse_light_queue: str = "document.parse.light.queue"
+    rabbitmq_parse_heavy_queue: str = "document.parse.heavy.queue"
+
     # Embedding / Hybrid 检索
     embedding_model: str = "text-embedding-v4"
     embedding_dims: int = 1024
     recall_top_k: int = 20
     rrf_k: int = 60
     rrf_top_n: int = 10
-    
-    graph_recall_enabled: bool = True
-
 
     # Rerank（DashScope 独立 compatible-api 端点，与 chat/embedding 不同）
     rerank_model: str = "qwen3-rerank"
@@ -79,6 +81,13 @@ class AppSettings(BaseSettings):
     langchain_project: str = "enterprise-knowledge-hub"
     langchain_environment: str = "development"
 
+    # 在 AppSettings 里加（建议放在 LangSmith 配置后面）
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_sample_rate: float = 1.0
+
     # settings.py 追加
     redis_url: str = "redis://127.0.0.1:6379/0"
 
@@ -87,15 +96,58 @@ class AppSettings(BaseSettings):
     memory_summary_trigger: int = 12     # window 超过 12 条时触发摘要
     memory_session_ttl_seconds: int = 259200  # Redis 3 天过期
 
-    # Mem0 长期记忆
+    # Mem0 长期记忆（需 pip install mem0ai，PG 需 CREATE EXTENSION vector）
     mem0_enabled: bool = False
     mem0_top_k_user: int = 3
     mem0_top_k_session: int = 2
+    mem0_collection_name: str = "mem0_memories"
+    mem0_llm_model: str = ""   # 空则复用 openai_model
+    mem0_embedding_model: str = ""  # 空则复用 embedding_model
+
+    # 审核策略
+    review_require_parsed: bool = True   # 未解析完不允许 approve
+
+    # 解析路由
+    parse_heavy_file_types: str = "mp4,mov,avi,mkv,mp3,wav,m4a"
+
+    # MinIO 公开 URL（Markdown 里图片链接）
+    minio_public_base_url: str = "http://127.0.0.1:9000/documents"
+
+    # 上传大小
+    max_upload_size_mb: int = 50
+    max_media_upload_size_mb: int = 500
+
+    allowed_file_types: str = "pdf,docx,md,txt,png,jpg,jpeg,webp,mp3,wav,m4a,mp4,mov,csv,xlsx"
+
+    # 单 Sheet / CSV 最多转多少行进 Markdown（防超大表撑爆 chunk）
+    spreadsheet_max_rows_per_sheet: int = 500
+
+    # 音视频解析
+    asr_model: str = "paraformer-v2"
+    asr_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
+    video_model: str = "qwen-vl-plus"         # 需开通 VL 多模态；403 见 .env.example
+    video_understand_mock: bool = False       # True=不调 VL API，开发用
+    video_understand_fail_open: bool = True   # API 失败时降级占位，不阻断整段解析
+    video_segment_seconds: int = 300          # 每 5 分钟一段
+    video_max_duration_seconds: int = 7200    # 单文件最长 2 小时
+    ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
+    # OCR（图片 / 视频帧，若已有可复用）
+    ocr_model: str = "qwen-vl-ocr-latest"
+
 
     @property
     def database_url(self) -> str:
         return (
             f"postgresql+asyncpg://{self.pg_user}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+        )
+
+    @property
+    def pg_connection_string(self) -> str:
+        """Mem0 pgvector 用的同步连接串（非 asyncpg）"""
+        return (
+            f"postgresql://{self.pg_user}:{self.pg_password}"
+            f"@{self.pg_host}:{self.pg_port}/{self.pg_database}"
         )
 
     @property
@@ -119,5 +171,22 @@ def _sync_langsmith_env() -> None:
         os.environ["LANGCHAIN_ENVIRONMENT"] = settings.langchain_environment
 
 
+def _sync_langfuse_env() -> None:
+    """Langfuse SDK 读 os.environ；enabled=false 时清掉，避免误上报。"""
+    import os
+    if not settings.langfuse_enabled:
+        for k in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL", "LANGFUSE_HOST"):
+            os.environ.pop(k, None)
+        return
+    if settings.langfuse_public_key:
+        os.environ["LANGFUSE_PUBLIC_KEY"] = settings.langfuse_public_key
+    if settings.langfuse_secret_key:
+        os.environ["LANGFUSE_SECRET_KEY"] = settings.langfuse_secret_key
+    if settings.langfuse_base_url:
+        # v3 用 BASE_URL；部分文档仍写 HOST，两个都写更稳
+        os.environ["LANGFUSE_BASE_URL"] = settings.langfuse_base_url
+        os.environ["LANGFUSE_HOST"] = settings.langfuse_base_url
+
 settings = AppSettings()
 _sync_langsmith_env()
+_sync_langfuse_env()

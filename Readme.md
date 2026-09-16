@@ -113,19 +113,23 @@ vector_done && graph_done → status = ready（可搜索/RAG）
 
 **检索**
 
-*还需要加的功能*
-上传文件提取图片
-支持pdf,docx,doc,xlsx,xls,pptx,ppt,txt,md,csv,json
-图片png,jpg
-音频mp3,wav,m4v
-视频mp4
-langgraph实现angentic rag架构
-基于Asr+流式tts实现语音交互，sse流式输出，websoc+流式tts实现语音的同步流式播放
-langfuse+ langsmith
-memo0
-短期对话存redis
-长期存postgresql
+**memory流程**
+1. 用户提问 → 进入`build_memory_context`
+2. **加载短期会话记忆**
+   - 优先读 Redis；Redis 空就去 PG 查历史对话，并回填到 Redis
+3. **加载长期记忆 Mem0**：向量库检索和当前问题相关的用户偏好记忆
+4. 短期 + 长期记忆合并成`MemoryContext`，组装消息给大模型
+5. LLM 输出答案返回前端
+6. 保存本轮用户 + AI 消息到 Redis 滑动窗口
+7. 判断对话条数是否太多：
+   - 不多：无事发生
+   - 太多：把老对话压缩成摘要、删掉窗口里老消息
+8. 后台异步把对话写入 PG 做永久备份
 
+**langgraph**
+
+
+*需要的功能*
 Reranker 模型重排，实现多路召回，提高检索准确率
 1.向量+关键词(PGVector+ElasticSearch)实现混合检索，用RRF融合和
 2.利用Neo4j构建知识图谱，通过LLM抽取文档实体、关系自动存入图数据库。用户问题会用LLM抽取实体，执行多跳检索，把推理链路和RAG的结果融合送入Prompt上下文，提升复杂业务问题回答的完整性与逻辑性
@@ -141,9 +145,30 @@ TTS实现语音的同步流式播放。
 化评估机制，自动跑实验来评估检索效果。
 
 **项目启动指令**
-# 项目
-uvicorn app.main:app --reload
 # 终端 1
-python -m app.workers.vector_consumer
+cd D:\code\python\enterprise-knowledge-hub
+docker compose up -d postgres redis minio elasticsearch neo4j rabbitmq
+
 # 终端 2
+cd D:\code\python\enterprise-knowledge-hub
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+
+# 终端 3~6（需要文档全流程时）
+.\.venv\Scripts\Activate.ps1
+python -m app.workers.parse_consumer --queue document.parse.light.queue
+# 新开终端
+python -m app.workers.parse_consumer --queue document.parse.heavy.queue
+python -m app.workers.vector_consumer
 python -m app.workers.graph_consumer
+
+**数据库迁移指令**
+alembic revision -m "add document parse fields"
+alembic upgrade head
+alembic current
+
+文档接入、异步解析、索引和权限隔离；
+混合检索、重排、引用溯源；
+一套小型评测集，能比较不同切分、召回、Rerank 策略；
+Trace、Token 成本、失败重试、人工兜底；
+Docker Compose 一键启动、README、架构图和接口文档。

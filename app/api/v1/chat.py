@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -22,6 +23,9 @@ from app.services.chat_service import ask_in_session, build_memory_context, crea
 from app.services.permission_service import get_accessible_owner_ids
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_STREAM_ERROR_MSG = "抱歉，处理问题时出错了，请稍后重试。"
 
 
 def _llm_configured() -> bool:
@@ -120,30 +124,41 @@ async def send_message_stream(
         full_answer: list[str] = []
         citations_data: list[dict] = []
 
-        async for line in stream_answer(
-            data.question, 
-            owner_ids,
-            user_id=current_user.id,
-            session_id=session.id,
-            memory=memory,
-        ):
-            payload = json.loads(line)
-            if payload["type"] == "token":
-                full_answer.append(payload["content"])
-            if payload["type"] == "done":
-                citations_data = payload.get("citations", [])
-            yield f"data: {line}\n\n"
+        try:
+            async for line in stream_answer(
+                data.question,
+                owner_ids,
+                user_id=current_user.id,
+                session_id=session.id,
+                memory=memory,
+            ):
+                payload = json.loads(line)
+                if payload["type"] == "token":
+                    full_answer.append(payload["content"])
+                if payload["type"] == "done":
+                    citations_data = payload.get("citations", [])
+                yield f"data: {line}\n\n"
+        except Exception:
+            logger.exception("chat stream failed session_id=%s", session.id)
+            err_payload = json.dumps({"type": "token", "content": _STREAM_ERROR_MSG})
+            done_payload = json.dumps({"type": "done", "citations": []})
+            yield f"data: {err_payload}\n\n"
+            yield f"data: {done_payload}\n\n"
+            full_answer.append(_STREAM_ERROR_MSG)
 
-        answer_text = "".join(full_answer)
+        answer_text = "".join(full_answer) or _STREAM_ERROR_MSG
         citations = [Citation(**c) for c in citations_data]
-        await save_message(db, session.id, "assistant", answer_text, citations)
+        try:
+            await save_message(db, session.id, "assistant", answer_text, citations)
 
-        from app.services.chat_service import _after_message_persisted
-        await _after_message_persisted(
-            user_id=current_user.id,
-            session_id=session.id,
-            question=data.question,
-            answer=answer_text,
-        )
+            from app.services.chat_service import _after_message_persisted
+            await _after_message_persisted(
+                user_id=current_user.id,
+                session_id=session.id,
+                question=data.question,
+                answer=answer_text,
+            )
+        except Exception:
+            logger.exception("persist assistant message failed session_id=%s", session.id)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

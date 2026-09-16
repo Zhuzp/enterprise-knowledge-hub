@@ -42,9 +42,13 @@ async def get_document_filter(user: User, admin: bool):
 
 async def get_accessible_owner_ids(db: AsyncSession, user: User) -> list[int] | None:
     """搜索/RAG 用：只返回 ready 文档的 owner_id"""
+    # 如果是管理员，直接返回 None，代表不做owner_id过滤（管理员可以看全部文档）
     if await is_admin(db, user.id):
         return None
+
+    # 集合初始化：用户自己的id一定能访问自己上传的文档
     owner_ids = {user.id}
+    # 如果用户有部门ID，查询【部门可见、公开、状态READY】的文档owner_id
     if user.department_id:
         result = await db.execute(
             select(Document.owner_id).where(
@@ -53,7 +57,9 @@ async def get_accessible_owner_ids(db: AsyncSession, user: User) -> list[int] | 
                 Document.status == DocumentStatus.READY.value,
             )
         )
+        # 把查询出来的owner_id全部加入集合（集合自动去重）
         owner_ids.update(r[0] for r in result.all())
+    # 单独查询：全局public公开、状态READY的文档owner_id
     result = await db.execute(
         select(Document.owner_id).where(
             Document.visibility == "public",

@@ -26,8 +26,8 @@ async def handle_message(message: aio_pika.IncomingMessage) -> None:
             if not doc:
                 logger.warning("文档不存在: %s", document_id)
                 return
-            if doc.status == DocumentStatus.READY.value:
-                logger.info("文档已是 ready，跳过: %s", document_id)
+            if doc.graph_done:
+                logger.info("graph 已完成，跳过: %s", document_id)
                 return
             if doc.status == DocumentStatus.FAILED.value:
                 logger.info("文档已是 failed，跳过: %s", document_id)
@@ -37,12 +37,15 @@ async def handle_message(message: aio_pika.IncomingMessage) -> None:
                 count = await process_graph(document_id, db)
                 await db.commit()
                 logger.info("graph 处理完成 doc=%s entities_chunks=%s", document_id, count)
-            except Exception:
+            except Exception as exc:
                 logger.exception("graph 处理失败 doc=%s", document_id)
                 await db.rollback()
                 doc = (await db.execute(select(Document).where(Document.id == document_id))).scalar_one_or_none()
                 if doc:
-                    doc.status = DocumentStatus.FAILED.value
+                    meta = dict(doc.parse_metadata or {})
+                    meta["graph_error"] = str(exc)[:500]
+                    doc.parse_metadata = meta
+                    doc.graph_done = False
                     await db.commit()
 
 
